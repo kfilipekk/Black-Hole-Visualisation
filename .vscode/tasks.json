@@ -1,0 +1,38 @@
+{
+    "version": "2.0.0",
+    "tasks": [
+        {
+            "label": "Build Black Hole Simulation",
+            "type": "shell",
+            "command": "cl.exe",
+            "args": [
+                "/EHsc",
+                "/DGLEW_STATIC",
+                "src/main.cpp",
+                "-I${workspaceFolder}/vendor/glfw-3.4.bin.WIN64/include",
+                "-I${workspaceFolder}/vendor/glew-2.1.0/include",
+                "-I${workspaceFolder}/vendor",
+                "/link",
+                "/LIBPATH:${workspaceFolder}/vendor/glfw-3.4.bin.WIN64/lib-vc2022",
+                "/LIBPATH:${workspaceFolder}/vendor/glew-2.1.0/lib/Release/x64",
+                "glfw3dll.lib",
+                "glew32s.lib",
+                "opengl32.lib",
+                "user32.lib",
+                "gdi32.lib",
+                "shell32.lib"
+            ],
+            "options": {
+                "cwd": "${workspaceFolder}"
+            },
+            "problemMatcher": [
+                "$msCompile"
+            ],
+            "group": {
+                "kind": "build",
+                "isDefault": true
+            },
+            "detail": "Builds the black hole simulation using MSVC"
+        }
+    ]
+}
