@@ -6,6 +6,70 @@
 #include <iostream>
 #include <vector>
 
+struct Camera {
+    float radius;
+    float yaw;
+    float pitch;
+};
+
+Camera camera = {
+    5.0f, //radius
+    -90.0f, //yaw
+    0.0f  //pitch
+};
+
+bool firstMouse = true;
+double lastX = 400, lastY = 300;
+bool isDragging = false;
+
+void mouse_button_callback(GLFWwindow* window, int button, int action, int mods) {
+    if (button == GLFW_MOUSE_BUTTON_LEFT) {
+        if (action == GLFW_PRESS) {
+            isDragging = true;
+            firstMouse = true;
+        } else if (action == GLFW_RELEASE) {
+            isDragging = false;
+        }
+    }
+}
+
+void cursor_position_callback(GLFWwindow* window, double xpos, double ypos) {
+    if (!isDragging) {
+        return;
+    }
+
+    if (firstMouse) {
+        lastX = xpos;
+        lastY = ypos;
+        firstMouse = false;
+    }
+
+    float xoffset = xpos - lastX;
+    float yoffset = lastY - ypos;
+    lastX = xpos;
+    lastY = ypos;
+
+    float sensitivity = 0.1f;
+    xoffset *= sensitivity;
+    yoffset *= sensitivity;
+
+    camera.yaw += xoffset;
+    camera.pitch += yoffset;
+
+    if (camera.pitch > 89.0f)
+        camera.pitch = 89.0f;
+    if (camera.pitch < -89.0f)
+        camera.pitch = -89.0f;
+}
+
+void scroll_callback(GLFWwindow* window, double xoffset, double yoffset)
+{
+    camera.radius -= (float)yoffset;
+    if (camera.radius < 1.0f)
+        camera.radius = 1.0f;
+    if (camera.radius > 45.0f)
+        camera.radius = 45.0f;
+}
 const char* vertexShaderSource = R"(
     #version 330 core
     layout (location = 0) in vec3 aPos;
@@ -52,11 +116,17 @@ int main() {
 
     glfwMakeContextCurrent(window);
 
+    glfwSetMouseButtonCallback(window, mouse_button_callback);
+    glfwSetCursorPosCallback(window, cursor_position_callback);
+    glfwSetScrollCallback(window, scroll_callback);
+
     glewExperimental = GL_TRUE;
     if (glewInit() != GLEW_OK) {
         std::cerr << "Failed to initialize GLEW" << std::endl;
         return -1;
     }
+
+    glEnable(GL_DEPTH_TEST);
 
     //Compile and link shaders
     GLuint vertexShader = glCreateShader(GL_VERTEX_SHADER);
@@ -98,7 +168,7 @@ int main() {
     glVertexAttribPointer(1, 3, GL_FLOAT, GL_FALSE, 6 * sizeof(float), (void*)(3 * sizeof(float)));
     glEnableVertexAttribArray(1);
 
-    // Get uniform locations
+    //Get uniform locations
     GLuint modelLoc = glGetUniformLocation(shaderProgram, "model");
     GLuint viewLoc = glGetUniformLocation(shaderProgram, "view");
     GLuint projLoc = glGetUniformLocation(shaderProgram, "projection");
@@ -109,15 +179,21 @@ int main() {
 
         glUseProgram(shaderProgram);
 
-        // Create transformations
+        //Calculate camera position
+        glm::vec3 cameraPos;
+        cameraPos.x = cos(glm::radians(camera.yaw)) * cos(glm::radians(camera.pitch)) * camera.radius;
+        cameraPos.y = sin(glm::radians(camera.pitch)) * camera.radius;
+        cameraPos.z = sin(glm::radians(camera.yaw)) * cos(glm::radians(camera.pitch)) * camera.radius;
+
+        //Create transformations
         glm::mat4 model = glm::mat4(1.0f);
-        glm::mat4 view = glm::translate(glm::mat4(1.0f), glm::vec3(0.0f, 0.0f, -3.0f));
+        glm::mat4 view = glm::lookAt(cameraPos, glm::vec3(0.0f, 0.0f, 0.0f), glm::vec3(0.0f, 1.0f, 0.0f));
         glm::mat4 projection = glm::perspective(glm::radians(45.0f), 800.0f / 600.0f, 0.1f, 100.0f);
 
-        // Rotate the triangle over time
+        //Rotate the triangle over time
         model = glm::rotate(model, (float)glfwGetTime() * glm::radians(50.0f), glm::vec3(0.5f, 1.0f, 0.0f));
 
-        // Pass them to the shaders
+        //Pass them to the shaders
         glUniformMatrix4fv(modelLoc, 1, GL_FALSE, glm::value_ptr(model));
         glUniformMatrix4fv(viewLoc, 1, GL_FALSE, glm::value_ptr(view));
         glUniformMatrix4fv(projLoc, 1, GL_FALSE, glm::value_ptr(projection));
