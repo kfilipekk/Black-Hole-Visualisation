@@ -164,22 +164,58 @@ int main() {
     glDeleteShader(vertexShader);
     glDeleteShader(fragmentShader);
 
-    //Triangle vertices (position and normal)
-    float vertices[] = {
-        //positions         //normals
-        -0.5f, -0.5f, 0.0f,  0.0f, 0.0f, 1.0f,
-         0.5f, -0.5f, 0.0f,  0.0f, 0.0f, 1.0f,
-         0.0f,  0.5f, 0.0f,  0.0f, 0.0f, 1.0f 
-    };
+    // Grid generation
+    const int gridWidth = 20;
+    const int gridHeight = 20;
+    std::vector<float> vertices;
+    std::vector<unsigned int> indices;
 
-    GLuint VBO, VAO;
+    for (int j = 0; j <= gridHeight; ++j) {
+        for (int i = 0; i <= gridWidth; ++i) {
+            float x = (float)i / (float)gridWidth * 10.0f - 5.0f;
+            float y = (float)j / (float)gridHeight * 10.0f - 5.0f;
+            float z = 0.0f;
+
+            //positions
+            vertices.push_back(x);
+            vertices.push_back(y);
+            vertices.push_back(z);
+            //normals
+            vertices.push_back(0.0f);
+            vertices.push_back(0.0f);
+            vertices.push_back(1.0f);
+        }
+    }
+
+    for (int j = 0; j < gridHeight; ++j) {
+        for (int i = 0; i < gridWidth; ++i) {
+            int row1 = j * (gridWidth + 1);
+            int row2 = (j + 1) * (gridWidth + 1);
+            
+            //triangle 1
+            indices.push_back(row1 + i);
+            indices.push_back(row1 + i + 1);
+            indices.push_back(row2 + i + 1);
+
+            //triangle 2
+            indices.push_back(row1 + i);
+            indices.push_back(row2 + i + 1);
+            indices.push_back(row2 + i);
+        }
+    }
+
+    GLuint VBO, VAO, EBO;
     glGenVertexArrays(1, &VAO);
     glGenBuffers(1, &VBO);
+    glGenBuffers(1, &EBO);
 
     glBindVertexArray(VAO);
 
     glBindBuffer(GL_ARRAY_BUFFER, VBO);
-    glBufferData(GL_ARRAY_BUFFER, sizeof(vertices), vertices, GL_STATIC_DRAW);
+    glBufferData(GL_ARRAY_BUFFER, vertices.size() * sizeof(float), &vertices[0], GL_STATIC_DRAW);
+
+    glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, EBO);
+    glBufferData(GL_ELEMENT_ARRAY_BUFFER, indices.size() * sizeof(unsigned int), &indices[0], GL_STATIC_DRAW);
 
     //Position attribute
     glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, 6 * sizeof(float), (void*)0);
@@ -217,16 +253,13 @@ int main() {
         glm::mat4 view = glm::lookAt(cameraPos, glm::vec3(0.0f, 0.0f, 0.0f), glm::vec3(0.0f, 1.0f, 0.0f));
         glm::mat4 projection = glm::perspective(glm::radians(45.0f), 800.0f / 600.0f, 0.1f, 100.0f);
 
-        //Rotate the triangle over time
-        model = glm::rotate(model, (float)glfwGetTime() * glm::radians(50.0f), glm::vec3(0.5f, 1.0f, 0.0f));
-
         //Pass them to the shaders
         glUniformMatrix4fv(modelLoc, 1, GL_FALSE, glm::value_ptr(model));
         glUniformMatrix4fv(viewLoc, 1, GL_FALSE, glm::value_ptr(view));
         glUniformMatrix4fv(projLoc, 1, GL_FALSE, glm::value_ptr(projection));
 
         glBindVertexArray(VAO);
-        glDrawArrays(GL_TRIANGLES, 0, 3);
+        glDrawElements(GL_TRIANGLES, indices.size(), GL_UNSIGNED_INT, 0);
 
         glfwSwapBuffers(window);
         glfwPollEvents();
@@ -234,6 +267,7 @@ int main() {
 
     glDeleteVertexArrays(1, &VAO);
     glDeleteBuffers(1, &VBO);
+    glDeleteBuffers(1, &EBO);
     glDeleteProgram(shaderProgram);
 
     glfwTerminate();
