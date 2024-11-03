@@ -55,11 +55,6 @@ void cursor_position_callback(GLFWwindow* window, double xpos, double ypos) {
 
     camera.yaw += xoffset;
     camera.pitch += yoffset;
-
-    if (camera.pitch > 89.0f)
-        camera.pitch = 89.0f;
-    if (camera.pitch < -89.0f)
-        camera.pitch = -89.0f;
 }
 
 void scroll_callback(GLFWwindow* window, double xoffset, double yoffset)
@@ -117,6 +112,16 @@ const char* fragmentShaderSource = R"(
 )";
 
 
+const char* blackHoleFragmentShaderSource = R"(
+    #version 330 core
+    out vec4 FragColor;
+
+    void main() {
+        FragColor = vec4(0.0, 0.0, 0.0, 1.0);
+    } 
+)";
+
+
 int main() {
     if (!glfwInit()) {
         std::cerr << "Failed to initialize GLFW" << std::endl;
@@ -161,30 +166,65 @@ int main() {
     glAttachShader(shaderProgram, vertexShader);
     glAttachShader(shaderProgram, fragmentShader);
     glLinkProgram(shaderProgram);
+
+    GLuint blackHoleShaderProgram = glCreateProgram();
+    glAttachShader(blackHoleShaderProgram, vertexShader);
+    GLuint blackHoleFragmentShader = glCreateShader(GL_FRAGMENT_SHADER);
+    glShaderSource(blackHoleFragmentShader, 1, &blackHoleFragmentShaderSource, NULL);
+    glCompileShader(blackHoleFragmentShader);
+    glAttachShader(blackHoleShaderProgram, blackHoleFragmentShader);
+    glLinkProgram(blackHoleShaderProgram);
+
+    glDeleteShader(blackHoleFragmentShader);
+
     glDeleteShader(vertexShader);
     glDeleteShader(fragmentShader);
 
-    // Grid generation
+    //Grid generation
     const int gridWidth = 20;
     const int gridHeight = 20;
+    std::vector<glm::vec3> positions;
+    std::vector<glm::vec3> normals;
     std::vector<float> vertices;
     std::vector<unsigned int> indices;
 
+    //Calculate vertex positions
     for (int j = 0; j <= gridHeight; ++j) {
         for (int i = 0; i <= gridWidth; ++i) {
             float x = (float)i / (float)gridWidth * 10.0f - 5.0f;
             float y = (float)j / (float)gridHeight * 10.0f - 5.0f;
-            float z = 0.0f;
-
-            //positions
-            vertices.push_back(x);
-            vertices.push_back(y);
-            vertices.push_back(z);
-            //normals
-            vertices.push_back(0.0f);
-            vertices.push_back(0.0f);
-            vertices.push_back(1.0f);
+            
+            float dist = sqrt(x * x + y * y);
+            float z = -2.0f * exp(-0.5f * dist * dist);
+            positions.push_back(glm::vec3(x, y, z));
         }
+    }
+
+    //Calculate normals
+    for (int j = 0; j <= gridHeight; ++j) {
+        for (int i = 0; i <= gridWidth; ++i) {
+            float x = (float)i / (float)gridWidth * 10.0f - 5.0f;
+            float y = (float)j / (float)gridHeight * 10.0f - 5.0f;
+            
+            float dist = sqrt(x * x + y * y);
+            float z = -2.0f * exp(-0.5f * dist * dist);
+
+            float df_dx = 2.0f * 0.5f * x * -z;
+            float df_dy = 2.0f * 0.5f * y * -z;
+
+            glm::vec3 normal = glm::normalize(glm::vec3(-df_dx, -df_dy, 1.0f));
+            normals.push_back(normal);
+        }
+    }
+
+    //Combine positions and normals into a single vertices array
+    for (size_t i = 0; i < positions.size(); ++i) {
+        vertices.push_back(positions[i].x);
+        vertices.push_back(positions[i].y);
+        vertices.push_back(positions[i].z);
+        vertices.push_back(normals[i].x);
+        vertices.push_back(normals[i].y);
+        vertices.push_back(normals[i].z);
     }
 
     for (int j = 0; j < gridHeight; ++j) {
@@ -232,6 +272,50 @@ int main() {
     GLuint lightColorLoc = glGetUniformLocation(shaderProgram, "lightColor");
     GLuint objectColorLoc = glGetUniformLocation(shaderProgram, "objectColor");
 
+    //Black hole sphere generation
+    const int sphereSegments = 50;
+    std::vector<float> sphereVertices;
+    for (int i = 0; i <= sphereSegments; ++i) {
+        for (int j = 0; j <= sphereSegments; ++j) {
+            float theta = i * 2.0f * 3.1415926f / sphereSegments;
+            float phi = j * 3.1415926f / sphereSegments;
+            float x = 0.5f * cos(theta) * sin(phi);
+            float y = 0.5f * cos(phi);
+            float z = 0.5f * sin(theta) * sin(phi);
+            sphereVertices.push_back(x);
+            sphereVertices.push_back(y);
+            sphereVertices.push_back(z);
+            sphereVertices.push_back(0); //dummy normal (CHANGE)
+            sphereVertices.push_back(0);
+            sphereVertices.push_back(0);
+        }
+    }
+    std::vector<unsigned int> sphereIndices;
+    for (int i = 0; i < sphereSegments; ++i) {
+        for (int j = 0; j < sphereSegments; ++j) {
+            int first = (i * (sphereSegments + 1)) + j;
+            int second = first + sphereSegments + 1;
+            sphereIndices.push_back(first);
+            sphereIndices.push_back(second);
+            sphereIndices.push_back(first + 1);
+            sphereIndices.push_back(second);
+            sphereIndices.push_back(second + 1);
+            sphereIndices.push_back(first + 1);
+        }
+    }
+
+    GLuint sphereVBO, sphereVAO, sphereEBO;
+    glGenVertexArrays(1, &sphereVAO);
+    glGenBuffers(1, &sphereVBO);
+    glGenBuffers(1, &sphereEBO);
+    glBindVertexArray(sphereVAO);
+    glBindBuffer(GL_ARRAY_BUFFER, sphereVBO);
+    glBufferData(GL_ARRAY_BUFFER, sphereVertices.size() * sizeof(float), &sphereVertices[0], GL_STATIC_DRAW);
+    glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, sphereEBO);
+    glBufferData(GL_ELEMENT_ARRAY_BUFFER, sphereIndices.size() * sizeof(unsigned int), &sphereIndices[0], GL_STATIC_DRAW);
+    glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, 6 * sizeof(float), (void*)0);
+    glEnableVertexAttribArray(0);
+
     while (!glfwWindowShouldClose(window)) {
         glClearColor(0.1f, 0.1f, 0.1f, 1.0f);
         glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
@@ -244,9 +328,9 @@ int main() {
 
         //Calculate camera position
         glm::vec3 cameraPos;
-        cameraPos.x = cos(glm::radians(camera.yaw)) * cos(glm::radians(camera.pitch)) * camera.radius;
-        cameraPos.y = sin(glm::radians(camera.pitch)) * camera.radius;
-        cameraPos.z = sin(glm::radians(camera.yaw)) * cos(glm::radians(camera.pitch)) * camera.radius;
+        cameraPos.x = camera.radius * cos(glm::radians(camera.pitch)) * cos(glm::radians(camera.yaw));
+        cameraPos.y = camera.radius * sin(glm::radians(camera.pitch));
+        cameraPos.z = camera.radius * cos(glm::radians(camera.pitch)) * sin(glm::radians(camera.yaw));
 
         //Create transformations
         glm::mat4 model = glm::mat4(1.0f);
@@ -261,6 +345,9 @@ int main() {
         glBindVertexArray(VAO);
         glDrawElements(GL_TRIANGLES, indices.size(), GL_UNSIGNED_INT, 0);
 
+        glBindVertexArray(sphereVAO);
+        glDrawElements(GL_TRIANGLES, sphereIndices.size(), GL_UNSIGNED_INT, 0);
+
         glfwSwapBuffers(window);
         glfwPollEvents();
     }
@@ -269,6 +356,10 @@ int main() {
     glDeleteBuffers(1, &VBO);
     glDeleteBuffers(1, &EBO);
     glDeleteProgram(shaderProgram);
+
+    glDeleteVertexArrays(1, &sphereVAO);
+    glDeleteBuffers(1, &sphereVBO);
+    glDeleteBuffers(1, &sphereEBO);
 
     glfwTerminate();
     return 0;
