@@ -5,6 +5,8 @@
 #include <glm/gtc/type_ptr.hpp>
 #include <iostream>
 #include <vector>
+#include <sstream>
+#include <iomanip>
 
 struct Camera {
     float radius;
@@ -19,8 +21,12 @@ Camera camera = {
 };
 
 bool firstMouse = true;
-double lastX = 400, lastY = 300;
+double lastX = 400.0, lastY = 300.0;
 bool isDragging = false;
+
+//Black hole parameters
+float blackHoleMass = 1.0f; //Relative mass (1.0 = default)
+bool needsGridUpdate = true;
 
 void mouse_button_callback(GLFWwindow* window, int button, int action, int mods) {
     if (button == GLFW_MOUSE_BUTTON_LEFT) {
@@ -56,11 +62,29 @@ void cursor_position_callback(GLFWwindow* window, double xpos, double ypos) {
     camera.yaw += xoffset;
     camera.pitch += yoffset;
 
-    // Prevent gimbal lock
     if (camera.pitch > 89.0f)
         camera.pitch = 89.0f;
     if (camera.pitch < -89.0f)
         camera.pitch = -89.0f;
+}
+
+void key_callback(GLFWwindow* window, int key, int scancode, int action, int mods) {
+    if (action == GLFW_PRESS || action == GLFW_REPEAT) {
+        if (key == GLFW_KEY_UP || key == GLFW_KEY_EQUAL) {
+            blackHoleMass += 0.1f;
+            if (blackHoleMass > 5.0f) blackHoleMass = 5.0f;
+            needsGridUpdate = true;
+        }
+        else if (key == GLFW_KEY_DOWN || key == GLFW_KEY_MINUS) {
+            blackHoleMass -= 0.1f;
+            if (blackHoleMass < 0.1f) blackHoleMass = 0.1f;
+            needsGridUpdate = true;
+        }
+        else if (key == GLFW_KEY_R) {
+            blackHoleMass = 1.0f;
+            needsGridUpdate = true;
+        }
+    }
 }
 
 void scroll_callback(GLFWwindow* window, double xoffset, double yoffset)
@@ -70,6 +94,34 @@ void scroll_callback(GLFWwindow* window, double xoffset, double yoffset)
         camera.radius = 1.0f;
     if (camera.radius > 45.0f)
         camera.radius = 45.0f;
+}
+
+void updateGrid(std::vector<glm::vec3>& gridPositions) {
+    const int gridWidth = 25;
+    const int gridHeight = 25;
+    
+    gridPositions.clear();
+    
+    //Generate grid vertices with mass-dependent curvature
+    for (int j = 0; j <= gridHeight; ++j) {
+        for (int i = 0; i <= gridWidth; ++i) {
+            float x = (float)(i - gridWidth/2) * 0.4f;
+            float z = (float)(j - gridHeight/2) * 0.4f;
+            
+            //Create spacetime curvature effect (stronger with higher mass)
+            float dist = sqrt(x * x + z * z);
+            float y = -2.0f * blackHoleMass * exp(-0.3f * dist * dist / blackHoleMass);
+            
+            gridPositions.push_back(glm::vec3(x, y, z));
+        }
+    }
+}
+
+void updateWindowTitle(GLFWwindow* window) {
+    std::stringstream ss;
+    ss << "Black Hole Simulator - Mass: " << std::fixed << std::setprecision(1) << blackHoleMass 
+       << "x (Use +/- or Up/Down to adjust, R to reset)";
+    glfwSetWindowTitle(window, ss.str().c_str());
 }
 const char* gridVertexShaderSource = R"(
     #version 330 core
@@ -87,7 +139,7 @@ const char* gridFragmentShaderSource = R"(
     out vec4 FragColor;
 
     void main() {
-        FragColor = vec4(0.3, 0.7, 1.0, 0.8); // Blue grid lines
+        FragColor = vec4(0.3, 0.7, 1.0, 0.8); //Blue grid lines
     } 
 )";
 
@@ -122,15 +174,15 @@ const char* diskFragmentShaderSource = R"(
         float angle = atan(TexCoord.y, TexCoord.x);
         float spiral = sin(angle * 6.0 - time * 2.0) * 0.5 + 0.5;
         
-        // Temperature gradient from center outward
+        //Temperature gradient from center outward
         float temp = 1.0 - smoothstep(0.5, 2.0, DistFromCenter);
         
-        vec3 hotColor = vec3(1.0, 0.4, 0.1); // Orange-red
-        vec3 coolColor = vec3(0.8, 0.2, 0.0); // Dark red
+        vec3 hotColor = vec3(1.0, 0.4, 0.1); //Orange-red
+        vec3 coolColor = vec3(0.8, 0.2, 0.0); //Dark red
         
         vec3 color = mix(coolColor, hotColor, temp * spiral);
         
-        // Alpha falloff at edges
+        //Alpha falloff at edges
         float alpha = smoothstep(2.5, 1.0, DistFromCenter) * 0.7;
         
         FragColor = vec4(color, alpha);
@@ -168,11 +220,11 @@ const char* fragmentShaderSource = R"(
     uniform vec3 objectColor;
 
     void main() {
-        // ambient
+        //ambient
         float ambientStrength = 0.1;
         vec3 ambient = ambientStrength * lightColor;
   	
-        // diffuse 
+        //diffuse 
         vec3 norm = normalize(Normal);
         vec3 lightDir = normalize(lightPos - FragPos);
         float diff = max(dot(norm, lightDir), 0.0);
@@ -216,6 +268,10 @@ int main() {
     glfwSetMouseButtonCallback(window, mouse_button_callback);
     glfwSetCursorPosCallback(window, cursor_position_callback);
     glfwSetScrollCallback(window, scroll_callback);
+    glfwSetKeyCallback(window, key_callback);
+
+    //Set initial window title
+    updateWindowTitle(window);
 
     glewExperimental = GL_TRUE;
     if (glewInit() != GLEW_OK) {
@@ -249,7 +305,7 @@ int main() {
 
     glDeleteShader(blackHoleFragmentShader);
 
-    // Create grid shader program
+    //Create grid shader program
     GLuint gridVertexShader = glCreateShader(GL_VERTEX_SHADER);
     glShaderSource(gridVertexShader, 1, &gridVertexShaderSource, NULL);
     glCompileShader(gridVertexShader);
@@ -263,7 +319,7 @@ int main() {
     glAttachShader(gridShaderProgram, gridFragmentShader);
     glLinkProgram(gridShaderProgram);
 
-    // Create disk shader program
+    //Create disk shader program
     GLuint diskVertexShader = glCreateShader(GL_VERTEX_SHADER);
     glShaderSource(diskVertexShader, 1, &diskVertexShaderSource, NULL);
     glCompileShader(diskVertexShader);
@@ -285,36 +341,25 @@ int main() {
     glDeleteShader(vertexShader);
     glDeleteShader(fragmentShader);
 
-    // Grid generation (spacetime visualization)
+    //Grid generation (spacetime visualization)
     const int gridWidth = 25;
     const int gridHeight = 25;
     std::vector<glm::vec3> gridPositions;
     std::vector<unsigned int> gridIndices;
 
-    // Generate grid vertices
-    for (int j = 0; j <= gridHeight; ++j) {
-        for (int i = 0; i <= gridWidth; ++i) {
-            float x = (float)(i - gridWidth/2) * 0.4f;
-            float z = (float)(j - gridHeight/2) * 0.4f;
-            
-            // Create spacetime curvature effect
-            float dist = sqrt(x * x + z * z);
-            float y = -2.0f * exp(-0.3f * dist * dist);
-            
-            gridPositions.push_back(glm::vec3(x, y, z));
-        }
-    }
+    //Initial grid generation
+    updateGrid(gridPositions);
 
-    // Generate grid line indices
+    //Generate grid line indices
     for (int j = 0; j < gridHeight; ++j) {
         for (int i = 0; i < gridWidth; ++i) {
             int current = j * (gridWidth + 1) + i;
             
-            // Horizontal lines
+            //Horizontal lines
             gridIndices.push_back(current);
             gridIndices.push_back(current + 1);
             
-            // Vertical lines
+            //Vertical lines
             gridIndices.push_back(current);
             gridIndices.push_back(current + gridWidth + 1);
         }
@@ -333,39 +378,39 @@ int main() {
     glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, sizeof(glm::vec3), (void*)0);
     glEnableVertexAttribArray(0);
 
-    // Accretion disk generation
+    //Accretion disk generation
     const int diskSegments = 64;
     const int diskRings = 16;
     std::vector<float> diskVertices;
     std::vector<unsigned int> diskIndices;
 
-    // Generate disk vertices
+    //Generate disk vertices
     for (int ring = 0; ring <= diskRings; ++ring) {
-        float radius = 0.5f + (float)ring / (float)diskRings * 1.5f; // Inner to outer radius
+        float radius = 0.5f + (float)ring / (float)diskRings * 1.5f; //Inner to outer radius
         for (int seg = 0; seg <= diskSegments; ++seg) {
             float angle = (float)seg / (float)diskSegments * 2.0f * 3.1415926f;
             float x = radius * cos(angle);
             float z = radius * sin(angle);
-            float y = 0.02f * sin(radius * 3.0f); // Slight vertical wave
+            float y = 0.02f * sin(radius * 3.0f); //Slight vertical wave
             
-            // Position
+            //Position
             diskVertices.push_back(x);
             diskVertices.push_back(y);
             diskVertices.push_back(z);
             
-            // Texture coordinates for animation
+            //Texture coordinates for animation
             diskVertices.push_back(x);
             diskVertices.push_back(z);
         }
     }
 
-    // Generate disk indices
+    //Generate disk indices
     for (int ring = 0; ring < diskRings; ++ring) {
         for (int seg = 0; seg < diskSegments; ++seg) {
             int current = ring * (diskSegments + 1) + seg;
             int next = current + diskSegments + 1;
             
-            // Two triangles per quad
+            //Two triangles per quad
             diskIndices.push_back(current);
             diskIndices.push_back(next);
             diskIndices.push_back(current + 1);
@@ -387,24 +432,24 @@ int main() {
     glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, diskEBO);
     glBufferData(GL_ELEMENT_ARRAY_BUFFER, diskIndices.size() * sizeof(unsigned int), &diskIndices[0], GL_STATIC_DRAW);
     
-    // Position attribute
+    //Position attribute
     glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, 5 * sizeof(float), (void*)0);
     glEnableVertexAttribArray(0);
-    // Texture coordinate attribute
+    //Texture coordinate attribute
     glVertexAttribPointer(1, 2, GL_FLOAT, GL_FALSE, 5 * sizeof(float), (void*)(3 * sizeof(float)));
     glEnableVertexAttribArray(1);
 
-    // Original surface mesh (now simplified)
+    //Original surface mesh (now simplified)
     std::vector<float> vertices;
     std::vector<unsigned int> indices;
 
-    // Create a simple surface for the original mesh
+    //Create a simple surface for the original mesh
     const int surfaceWidth = 20;
     const int surfaceHeight = 20;
     std::vector<glm::vec3> positions;
     std::vector<glm::vec3> normals;
 
-    // Calculate vertex positions for surface
+    //Calculate vertex positions for surface
     for (int j = 0; j <= surfaceHeight; ++j) {
         for (int i = 0; i <= surfaceWidth; ++i) {
             float x = (float)i / (float)surfaceWidth * 10.0f - 5.0f;
@@ -416,7 +461,7 @@ int main() {
         }
     }
 
-    // Calculate normals for surface
+    //Calculate normals for surface
     for (int j = 0; j <= surfaceHeight; ++j) {
         for (int i = 0; i <= surfaceWidth; ++i) {
             float x = (float)i / (float)surfaceWidth * 10.0f - 5.0f;
@@ -535,7 +580,19 @@ int main() {
     while (!glfwWindowShouldClose(window)) {
         float currentTime = glfwGetTime();
         
-        glClearColor(0.0f, 0.0f, 0.05f, 1.0f); // Dark space background
+        //Update grid if mass changed
+        if (needsGridUpdate) {
+            updateGrid(gridPositions);
+            updateWindowTitle(window);
+            
+            //Update GPU buffer
+            glBindBuffer(GL_ARRAY_BUFFER, gridVBO);
+            glBufferData(GL_ARRAY_BUFFER, gridPositions.size() * sizeof(glm::vec3), &gridPositions[0], GL_STATIC_DRAW);
+            
+            needsGridUpdate = false;
+        }
+        
+        glClearColor(0.0f, 0.0f, 0.05f, 1.0f);
         glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
 
         //Calculate camera position
@@ -550,7 +607,7 @@ int main() {
         glm::mat4 projection = glm::perspective(glm::radians(45.0f), 800.0f / 600.0f, 0.1f, 100.0f);
         glm::mat4 viewProj = projection * view;
 
-        // Draw spacetime grid
+        //Draw spacetime grid
         glUseProgram(gridShaderProgram);
         glUniformMatrix4fv(glGetUniformLocation(gridShaderProgram, "viewProj"), 1, GL_FALSE, glm::value_ptr(viewProj));
         
@@ -560,7 +617,7 @@ int main() {
         glDrawElements(GL_LINES, gridIndices.size(), GL_UNSIGNED_INT, 0);
         glDisable(GL_BLEND);
 
-        // Draw accretion disk with animation
+        //Draw accretion disk with animation
         glUseProgram(diskShaderProgram);
         glUniformMatrix4fv(glGetUniformLocation(diskShaderProgram, "model"), 1, GL_FALSE, glm::value_ptr(model));
         glUniformMatrix4fv(glGetUniformLocation(diskShaderProgram, "view"), 1, GL_FALSE, glm::value_ptr(view));
@@ -573,9 +630,10 @@ int main() {
         glDrawElements(GL_TRIANGLES, diskIndices.size(), GL_UNSIGNED_INT, 0);
         glDisable(GL_BLEND);
 
-        // Draw black hole sphere
+        //Draw black hole sphere (scaled by mass)
         glUseProgram(blackHoleShaderProgram);
-        glUniformMatrix4fv(glGetUniformLocation(blackHoleShaderProgram, "model"), 1, GL_FALSE, glm::value_ptr(model));
+        glm::mat4 blackHoleModel = glm::scale(glm::mat4(1.0f), glm::vec3(blackHoleMass * 0.5f));
+        glUniformMatrix4fv(glGetUniformLocation(blackHoleShaderProgram, "model"), 1, GL_FALSE, glm::value_ptr(blackHoleModel));
         glUniformMatrix4fv(glGetUniformLocation(blackHoleShaderProgram, "view"), 1, GL_FALSE, glm::value_ptr(view));
         glUniformMatrix4fv(glGetUniformLocation(blackHoleShaderProgram, "projection"), 1, GL_FALSE, glm::value_ptr(projection));
         glBindVertexArray(sphereVAO);
