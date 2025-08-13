@@ -7,6 +7,11 @@
 #include <vector>
 #include <sstream>
 #include <iomanip>
+#include <cmath>
+#include <cstdlib>
+#include <algorithm>
+
+#include "AccretionDisk.h"
 
 struct Camera {
     float radius;
@@ -143,52 +148,6 @@ const char* gridFragmentShaderSource = R"(
     } 
 )";
 
-const char* diskVertexShaderSource = R"(
-    #version 330 core
-    layout (location = 0) in vec3 aPos;
-    layout (location = 1) in vec2 aTexCoord;
-
-    out vec2 TexCoord;
-    out float DistFromCenter;
-
-    uniform mat4 model;
-    uniform mat4 view;
-    uniform mat4 projection;
-
-    void main() {
-        gl_Position = projection * view * model * vec4(aPos, 1.0);
-        TexCoord = aTexCoord;
-        DistFromCenter = length(aPos.xz);
-    }
-)";
-
-const char* diskFragmentShaderSource = R"(
-    #version 330 core
-    in vec2 TexCoord;
-    in float DistFromCenter;
-    out vec4 FragColor;
-
-    uniform float time;
-
-    void main() {
-        float angle = atan(TexCoord.y, TexCoord.x);
-        float spiral = sin(angle * 6.0 - time * 2.0) * 0.5 + 0.5;
-        
-        //Temperature gradient from center outward
-        float temp = 1.0 - smoothstep(0.5, 2.0, DistFromCenter);
-        
-        vec3 hotColor = vec3(1.0, 0.4, 0.1); //Orange-red
-        vec3 coolColor = vec3(0.8, 0.2, 0.0); //Dark red
-        
-        vec3 color = mix(coolColor, hotColor, temp * spiral);
-        
-        //Alpha falloff at edges
-        float alpha = smoothstep(2.5, 1.0, DistFromCenter) * 0.7;
-        
-        FragColor = vec4(color, alpha);
-    } 
-)";
-
 const char* vertexShaderSource = R"(
     #version 330 core
     layout (location = 0) in vec3 aPos;
@@ -319,7 +278,10 @@ int main() {
     glAttachShader(gridShaderProgram, gridFragmentShader);
     glLinkProgram(gridShaderProgram);
 
-    //Create disk shader program
+    //Create disk shader program using AccretionDisk class
+    const char* diskVertexShaderSource = AccretionDisk::getVertexShaderSource();
+    const char* diskFragmentShaderSource = AccretionDisk::getFragmentShaderSource();
+    
     GLuint diskVertexShader = glCreateShader(GL_VERTEX_SHADER);
     glShaderSource(diskVertexShader, 1, &diskVertexShaderSource, NULL);
     glCompileShader(diskVertexShader);
@@ -378,66 +340,9 @@ int main() {
     glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, sizeof(glm::vec3), (void*)0);
     glEnableVertexAttribArray(0);
 
-    //Accretion disk generation
-    const int diskSegments = 64;
-    const int diskRings = 16;
-    std::vector<float> diskVertices;
-    std::vector<unsigned int> diskIndices;
-
-    //Generate disk vertices
-    for (int ring = 0; ring <= diskRings; ++ring) {
-        float radius = 0.5f + (float)ring / (float)diskRings * 1.5f; //Inner to outer radius
-        for (int seg = 0; seg <= diskSegments; ++seg) {
-            float angle = (float)seg / (float)diskSegments * 2.0f * 3.1415926f;
-            float x = radius * cos(angle);
-            float z = radius * sin(angle);
-            float y = 0.02f * sin(radius * 3.0f); //Slight vertical wave
-            
-            //Position
-            diskVertices.push_back(x);
-            diskVertices.push_back(y);
-            diskVertices.push_back(z);
-            
-            //Texture coordinates for animation
-            diskVertices.push_back(x);
-            diskVertices.push_back(z);
-        }
-    }
-
-    //Generate disk indices
-    for (int ring = 0; ring < diskRings; ++ring) {
-        for (int seg = 0; seg < diskSegments; ++seg) {
-            int current = ring * (diskSegments + 1) + seg;
-            int next = current + diskSegments + 1;
-            
-            //Two triangles per quad
-            diskIndices.push_back(current);
-            diskIndices.push_back(next);
-            diskIndices.push_back(current + 1);
-            
-            diskIndices.push_back(current + 1);
-            diskIndices.push_back(next);
-            diskIndices.push_back(next + 1);
-        }
-    }
-
-    GLuint diskVBO, diskVAO, diskEBO;
-    glGenVertexArrays(1, &diskVAO);
-    glGenBuffers(1, &diskVBO);
-    glGenBuffers(1, &diskEBO);
-
-    glBindVertexArray(diskVAO);
-    glBindBuffer(GL_ARRAY_BUFFER, diskVBO);
-    glBufferData(GL_ARRAY_BUFFER, diskVertices.size() * sizeof(float), &diskVertices[0], GL_STATIC_DRAW);
-    glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, diskEBO);
-    glBufferData(GL_ELEMENT_ARRAY_BUFFER, diskIndices.size() * sizeof(unsigned int), &diskIndices[0], GL_STATIC_DRAW);
-    
-    //Position attribute
-    glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, 5 * sizeof(float), (void*)0);
-    glEnableVertexAttribArray(0);
-    //Texture coordinate attribute
-    glVertexAttribPointer(1, 2, GL_FLOAT, GL_FALSE, 5 * sizeof(float), (void*)(3 * sizeof(float)));
-    glEnableVertexAttribArray(1);
+    //Create and initialize the accretion disk
+    AccretionDisk accretionDisk;
+    accretionDisk.initialize(blackHoleMass);
 
     //Original surface mesh (now simplified)
     std::vector<float> vertices;
@@ -589,6 +494,9 @@ int main() {
             glBindBuffer(GL_ARRAY_BUFFER, gridVBO);
             glBufferData(GL_ARRAY_BUFFER, gridPositions.size() * sizeof(glm::vec3), &gridPositions[0], GL_STATIC_DRAW);
             
+            //Update accretion disk for new mass
+            accretionDisk.update(blackHoleMass);
+            
             needsGridUpdate = false;
         }
         
@@ -617,18 +525,8 @@ int main() {
         glDrawElements(GL_LINES, gridIndices.size(), GL_UNSIGNED_INT, 0);
         glDisable(GL_BLEND);
 
-        //Draw accretion disk with animation
-        glUseProgram(diskShaderProgram);
-        glUniformMatrix4fv(glGetUniformLocation(diskShaderProgram, "model"), 1, GL_FALSE, glm::value_ptr(model));
-        glUniformMatrix4fv(glGetUniformLocation(diskShaderProgram, "view"), 1, GL_FALSE, glm::value_ptr(view));
-        glUniformMatrix4fv(glGetUniformLocation(diskShaderProgram, "projection"), 1, GL_FALSE, glm::value_ptr(projection));
-        glUniform1f(glGetUniformLocation(diskShaderProgram, "time"), currentTime);
-        
-        glEnable(GL_BLEND);
-        glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
-        glBindVertexArray(diskVAO);
-        glDrawElements(GL_TRIANGLES, diskIndices.size(), GL_UNSIGNED_INT, 0);
-        glDisable(GL_BLEND);
+        //Draw realistic 3D accretion disk using AccretionDisk class
+        accretionDisk.render(diskShaderProgram, model, view, projection, currentTime, blackHoleMass);
 
         //Draw black hole sphere (scaled by mass)
         glUseProgram(blackHoleShaderProgram);
@@ -653,9 +551,6 @@ int main() {
     glDeleteBuffers(1, &gridEBO);
     glDeleteProgram(gridShaderProgram);
 
-    glDeleteVertexArrays(1, &diskVAO);
-    glDeleteBuffers(1, &diskVBO);
-    glDeleteBuffers(1, &diskEBO);
     glDeleteProgram(diskShaderProgram);
 
     glDeleteVertexArrays(1, &sphereVAO);
