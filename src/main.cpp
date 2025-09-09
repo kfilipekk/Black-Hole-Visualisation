@@ -55,6 +55,12 @@ void cursor_position_callback(GLFWwindow* window, double xpos, double ypos) {
 
     camera.yaw += xoffset;
     camera.pitch += yoffset;
+
+    // Prevent gimbal lock
+    if (camera.pitch > 89.0f)
+        camera.pitch = 89.0f;
+    if (camera.pitch < -89.0f)
+        camera.pitch = -89.0f;
 }
 
 void scroll_callback(GLFWwindow* window, double xoffset, double yoffset)
@@ -65,6 +71,72 @@ void scroll_callback(GLFWwindow* window, double xoffset, double yoffset)
     if (camera.radius > 45.0f)
         camera.radius = 45.0f;
 }
+const char* gridVertexShaderSource = R"(
+    #version 330 core
+    layout (location = 0) in vec3 aPos;
+
+    uniform mat4 viewProj;
+
+    void main() {
+        gl_Position = viewProj * vec4(aPos, 1.0);
+    }
+)";
+
+const char* gridFragmentShaderSource = R"(
+    #version 330 core
+    out vec4 FragColor;
+
+    void main() {
+        FragColor = vec4(0.3, 0.7, 1.0, 0.8); // Blue grid lines
+    } 
+)";
+
+const char* diskVertexShaderSource = R"(
+    #version 330 core
+    layout (location = 0) in vec3 aPos;
+    layout (location = 1) in vec2 aTexCoord;
+
+    out vec2 TexCoord;
+    out float DistFromCenter;
+
+    uniform mat4 model;
+    uniform mat4 view;
+    uniform mat4 projection;
+
+    void main() {
+        gl_Position = projection * view * model * vec4(aPos, 1.0);
+        TexCoord = aTexCoord;
+        DistFromCenter = length(aPos.xz);
+    }
+)";
+
+const char* diskFragmentShaderSource = R"(
+    #version 330 core
+    in vec2 TexCoord;
+    in float DistFromCenter;
+    out vec4 FragColor;
+
+    uniform float time;
+
+    void main() {
+        float angle = atan(TexCoord.y, TexCoord.x);
+        float spiral = sin(angle * 6.0 - time * 2.0) * 0.5 + 0.5;
+        
+        // Temperature gradient from center outward
+        float temp = 1.0 - smoothstep(0.5, 2.0, DistFromCenter);
+        
+        vec3 hotColor = vec3(1.0, 0.4, 0.1); // Orange-red
+        vec3 coolColor = vec3(0.8, 0.2, 0.0); // Dark red
+        
+        vec3 color = mix(coolColor, hotColor, temp * spiral);
+        
+        // Alpha falloff at edges
+        float alpha = smoothstep(2.5, 1.0, DistFromCenter) * 0.7;
+        
+        FragColor = vec4(color, alpha);
+    } 
+)";
+
 const char* vertexShaderSource = R"(
     #version 330 core
     layout (location = 0) in vec3 aPos;
@@ -96,11 +168,11 @@ const char* fragmentShaderSource = R"(
     uniform vec3 objectColor;
 
     void main() {
-        //ambient
+        // ambient
         float ambientStrength = 0.1;
         vec3 ambient = ambientStrength * lightColor;
   	
-        //diffuse 
+        // diffuse 
         vec3 norm = normalize(Normal);
         vec3 lightDir = normalize(lightPos - FragPos);
         float diff = max(dot(norm, lightDir), 0.0);
@@ -177,22 +249,166 @@ int main() {
 
     glDeleteShader(blackHoleFragmentShader);
 
+    // Create grid shader program
+    GLuint gridVertexShader = glCreateShader(GL_VERTEX_SHADER);
+    glShaderSource(gridVertexShader, 1, &gridVertexShaderSource, NULL);
+    glCompileShader(gridVertexShader);
+
+    GLuint gridFragmentShader = glCreateShader(GL_FRAGMENT_SHADER);
+    glShaderSource(gridFragmentShader, 1, &gridFragmentShaderSource, NULL);
+    glCompileShader(gridFragmentShader);
+
+    GLuint gridShaderProgram = glCreateProgram();
+    glAttachShader(gridShaderProgram, gridVertexShader);
+    glAttachShader(gridShaderProgram, gridFragmentShader);
+    glLinkProgram(gridShaderProgram);
+
+    // Create disk shader program
+    GLuint diskVertexShader = glCreateShader(GL_VERTEX_SHADER);
+    glShaderSource(diskVertexShader, 1, &diskVertexShaderSource, NULL);
+    glCompileShader(diskVertexShader);
+
+    GLuint diskFragmentShader = glCreateShader(GL_FRAGMENT_SHADER);
+    glShaderSource(diskFragmentShader, 1, &diskFragmentShaderSource, NULL);
+    glCompileShader(diskFragmentShader);
+
+    GLuint diskShaderProgram = glCreateProgram();
+    glAttachShader(diskShaderProgram, diskVertexShader);
+    glAttachShader(diskShaderProgram, diskFragmentShader);
+    glLinkProgram(diskShaderProgram);
+
+    glDeleteShader(gridVertexShader);
+    glDeleteShader(gridFragmentShader);
+    glDeleteShader(diskVertexShader);
+    glDeleteShader(diskFragmentShader);
+
     glDeleteShader(vertexShader);
     glDeleteShader(fragmentShader);
 
-    //Grid generation
-    const int gridWidth = 20;
-    const int gridHeight = 20;
-    std::vector<glm::vec3> positions;
-    std::vector<glm::vec3> normals;
+    // Grid generation (spacetime visualization)
+    const int gridWidth = 25;
+    const int gridHeight = 25;
+    std::vector<glm::vec3> gridPositions;
+    std::vector<unsigned int> gridIndices;
+
+    // Generate grid vertices
+    for (int j = 0; j <= gridHeight; ++j) {
+        for (int i = 0; i <= gridWidth; ++i) {
+            float x = (float)(i - gridWidth/2) * 0.4f;
+            float z = (float)(j - gridHeight/2) * 0.4f;
+            
+            // Create spacetime curvature effect
+            float dist = sqrt(x * x + z * z);
+            float y = -2.0f * exp(-0.3f * dist * dist);
+            
+            gridPositions.push_back(glm::vec3(x, y, z));
+        }
+    }
+
+    // Generate grid line indices
+    for (int j = 0; j < gridHeight; ++j) {
+        for (int i = 0; i < gridWidth; ++i) {
+            int current = j * (gridWidth + 1) + i;
+            
+            // Horizontal lines
+            gridIndices.push_back(current);
+            gridIndices.push_back(current + 1);
+            
+            // Vertical lines
+            gridIndices.push_back(current);
+            gridIndices.push_back(current + gridWidth + 1);
+        }
+    }
+
+    GLuint gridVBO, gridVAO, gridEBO;
+    glGenVertexArrays(1, &gridVAO);
+    glGenBuffers(1, &gridVBO);
+    glGenBuffers(1, &gridEBO);
+
+    glBindVertexArray(gridVAO);
+    glBindBuffer(GL_ARRAY_BUFFER, gridVBO);
+    glBufferData(GL_ARRAY_BUFFER, gridPositions.size() * sizeof(glm::vec3), &gridPositions[0], GL_STATIC_DRAW);
+    glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, gridEBO);
+    glBufferData(GL_ELEMENT_ARRAY_BUFFER, gridIndices.size() * sizeof(unsigned int), &gridIndices[0], GL_STATIC_DRAW);
+    glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, sizeof(glm::vec3), (void*)0);
+    glEnableVertexAttribArray(0);
+
+    // Accretion disk generation
+    const int diskSegments = 64;
+    const int diskRings = 16;
+    std::vector<float> diskVertices;
+    std::vector<unsigned int> diskIndices;
+
+    // Generate disk vertices
+    for (int ring = 0; ring <= diskRings; ++ring) {
+        float radius = 0.5f + (float)ring / (float)diskRings * 1.5f; // Inner to outer radius
+        for (int seg = 0; seg <= diskSegments; ++seg) {
+            float angle = (float)seg / (float)diskSegments * 2.0f * 3.1415926f;
+            float x = radius * cos(angle);
+            float z = radius * sin(angle);
+            float y = 0.02f * sin(radius * 3.0f); // Slight vertical wave
+            
+            // Position
+            diskVertices.push_back(x);
+            diskVertices.push_back(y);
+            diskVertices.push_back(z);
+            
+            // Texture coordinates for animation
+            diskVertices.push_back(x);
+            diskVertices.push_back(z);
+        }
+    }
+
+    // Generate disk indices
+    for (int ring = 0; ring < diskRings; ++ring) {
+        for (int seg = 0; seg < diskSegments; ++seg) {
+            int current = ring * (diskSegments + 1) + seg;
+            int next = current + diskSegments + 1;
+            
+            // Two triangles per quad
+            diskIndices.push_back(current);
+            diskIndices.push_back(next);
+            diskIndices.push_back(current + 1);
+            
+            diskIndices.push_back(current + 1);
+            diskIndices.push_back(next);
+            diskIndices.push_back(next + 1);
+        }
+    }
+
+    GLuint diskVBO, diskVAO, diskEBO;
+    glGenVertexArrays(1, &diskVAO);
+    glGenBuffers(1, &diskVBO);
+    glGenBuffers(1, &diskEBO);
+
+    glBindVertexArray(diskVAO);
+    glBindBuffer(GL_ARRAY_BUFFER, diskVBO);
+    glBufferData(GL_ARRAY_BUFFER, diskVertices.size() * sizeof(float), &diskVertices[0], GL_STATIC_DRAW);
+    glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, diskEBO);
+    glBufferData(GL_ELEMENT_ARRAY_BUFFER, diskIndices.size() * sizeof(unsigned int), &diskIndices[0], GL_STATIC_DRAW);
+    
+    // Position attribute
+    glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, 5 * sizeof(float), (void*)0);
+    glEnableVertexAttribArray(0);
+    // Texture coordinate attribute
+    glVertexAttribPointer(1, 2, GL_FLOAT, GL_FALSE, 5 * sizeof(float), (void*)(3 * sizeof(float)));
+    glEnableVertexAttribArray(1);
+
+    // Original surface mesh (now simplified)
     std::vector<float> vertices;
     std::vector<unsigned int> indices;
 
-    //Calculate vertex positions
-    for (int j = 0; j <= gridHeight; ++j) {
-        for (int i = 0; i <= gridWidth; ++i) {
-            float x = (float)i / (float)gridWidth * 10.0f - 5.0f;
-            float y = (float)j / (float)gridHeight * 10.0f - 5.0f;
+    // Create a simple surface for the original mesh
+    const int surfaceWidth = 20;
+    const int surfaceHeight = 20;
+    std::vector<glm::vec3> positions;
+    std::vector<glm::vec3> normals;
+
+    // Calculate vertex positions for surface
+    for (int j = 0; j <= surfaceHeight; ++j) {
+        for (int i = 0; i <= surfaceWidth; ++i) {
+            float x = (float)i / (float)surfaceWidth * 10.0f - 5.0f;
+            float y = (float)j / (float)surfaceHeight * 10.0f - 5.0f;
             
             float dist = sqrt(x * x + y * y);
             float z = -2.0f * exp(-0.5f * dist * dist);
@@ -200,11 +416,11 @@ int main() {
         }
     }
 
-    //Calculate normals
-    for (int j = 0; j <= gridHeight; ++j) {
-        for (int i = 0; i <= gridWidth; ++i) {
-            float x = (float)i / (float)gridWidth * 10.0f - 5.0f;
-            float y = (float)j / (float)gridHeight * 10.0f - 5.0f;
+    // Calculate normals for surface
+    for (int j = 0; j <= surfaceHeight; ++j) {
+        for (int i = 0; i <= surfaceWidth; ++i) {
+            float x = (float)i / (float)surfaceWidth * 10.0f - 5.0f;
+            float y = (float)j / (float)surfaceHeight * 10.0f - 5.0f;
             
             float dist = sqrt(x * x + y * y);
             float z = -2.0f * exp(-0.5f * dist * dist);
@@ -217,7 +433,7 @@ int main() {
         }
     }
 
-    //Combine positions and normals into a single vertices array
+    //Combine positions and normals into vertices array
     for (size_t i = 0; i < positions.size(); ++i) {
         vertices.push_back(positions[i].x);
         vertices.push_back(positions[i].y);
@@ -227,10 +443,10 @@ int main() {
         vertices.push_back(normals[i].z);
     }
 
-    for (int j = 0; j < gridHeight; ++j) {
-        for (int i = 0; i < gridWidth; ++i) {
-            int row1 = j * (gridWidth + 1);
-            int row2 = (j + 1) * (gridWidth + 1);
+    for (int j = 0; j < surfaceHeight; ++j) {
+        for (int i = 0; i < surfaceWidth; ++i) {
+            int row1 = j * (surfaceWidth + 1);
+            int row2 = (j + 1) * (surfaceWidth + 1);
             
             //triangle 1
             indices.push_back(row1 + i);
@@ -317,14 +533,10 @@ int main() {
     glEnableVertexAttribArray(0);
 
     while (!glfwWindowShouldClose(window)) {
-        glClearColor(0.1f, 0.1f, 0.1f, 1.0f);
+        float currentTime = glfwGetTime();
+        
+        glClearColor(0.0f, 0.0f, 0.05f, 1.0f); // Dark space background
         glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
-
-        glUseProgram(shaderProgram);
-
-        glUniform3f(lightPosLoc, 1.0f, 1.0f, 2.0f);
-        glUniform3f(lightColorLoc, 1.0f, 1.0f, 1.0f);
-        glUniform3f(objectColorLoc, 1.0f, 0.5f, 0.31f);
 
         //Calculate camera position
         glm::vec3 cameraPos;
@@ -336,15 +548,36 @@ int main() {
         glm::mat4 model = glm::mat4(1.0f);
         glm::mat4 view = glm::lookAt(cameraPos, glm::vec3(0.0f, 0.0f, 0.0f), glm::vec3(0.0f, 1.0f, 0.0f));
         glm::mat4 projection = glm::perspective(glm::radians(45.0f), 800.0f / 600.0f, 0.1f, 100.0f);
+        glm::mat4 viewProj = projection * view;
 
-        //Pass them to the shaders
-        glUniformMatrix4fv(modelLoc, 1, GL_FALSE, glm::value_ptr(model));
-        glUniformMatrix4fv(viewLoc, 1, GL_FALSE, glm::value_ptr(view));
-        glUniformMatrix4fv(projLoc, 1, GL_FALSE, glm::value_ptr(projection));
+        // Draw spacetime grid
+        glUseProgram(gridShaderProgram);
+        glUniformMatrix4fv(glGetUniformLocation(gridShaderProgram, "viewProj"), 1, GL_FALSE, glm::value_ptr(viewProj));
+        
+        glEnable(GL_BLEND);
+        glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+        glBindVertexArray(gridVAO);
+        glDrawElements(GL_LINES, gridIndices.size(), GL_UNSIGNED_INT, 0);
+        glDisable(GL_BLEND);
 
-        glBindVertexArray(VAO);
-        glDrawElements(GL_TRIANGLES, indices.size(), GL_UNSIGNED_INT, 0);
+        // Draw accretion disk with animation
+        glUseProgram(diskShaderProgram);
+        glUniformMatrix4fv(glGetUniformLocation(diskShaderProgram, "model"), 1, GL_FALSE, glm::value_ptr(model));
+        glUniformMatrix4fv(glGetUniformLocation(diskShaderProgram, "view"), 1, GL_FALSE, glm::value_ptr(view));
+        glUniformMatrix4fv(glGetUniformLocation(diskShaderProgram, "projection"), 1, GL_FALSE, glm::value_ptr(projection));
+        glUniform1f(glGetUniformLocation(diskShaderProgram, "time"), currentTime);
+        
+        glEnable(GL_BLEND);
+        glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+        glBindVertexArray(diskVAO);
+        glDrawElements(GL_TRIANGLES, diskIndices.size(), GL_UNSIGNED_INT, 0);
+        glDisable(GL_BLEND);
 
+        // Draw black hole sphere
+        glUseProgram(blackHoleShaderProgram);
+        glUniformMatrix4fv(glGetUniformLocation(blackHoleShaderProgram, "model"), 1, GL_FALSE, glm::value_ptr(model));
+        glUniformMatrix4fv(glGetUniformLocation(blackHoleShaderProgram, "view"), 1, GL_FALSE, glm::value_ptr(view));
+        glUniformMatrix4fv(glGetUniformLocation(blackHoleShaderProgram, "projection"), 1, GL_FALSE, glm::value_ptr(projection));
         glBindVertexArray(sphereVAO);
         glDrawElements(GL_TRIANGLES, sphereIndices.size(), GL_UNSIGNED_INT, 0);
 
@@ -357,9 +590,20 @@ int main() {
     glDeleteBuffers(1, &EBO);
     glDeleteProgram(shaderProgram);
 
+    glDeleteVertexArrays(1, &gridVAO);
+    glDeleteBuffers(1, &gridVBO);
+    glDeleteBuffers(1, &gridEBO);
+    glDeleteProgram(gridShaderProgram);
+
+    glDeleteVertexArrays(1, &diskVAO);
+    glDeleteBuffers(1, &diskVBO);
+    glDeleteBuffers(1, &diskEBO);
+    glDeleteProgram(diskShaderProgram);
+
     glDeleteVertexArrays(1, &sphereVAO);
     glDeleteBuffers(1, &sphereVBO);
     glDeleteBuffers(1, &sphereEBO);
+    glDeleteProgram(blackHoleShaderProgram);
 
     glfwTerminate();
     return 0;
