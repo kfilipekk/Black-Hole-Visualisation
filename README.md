@@ -63,7 +63,7 @@ Keyboard Controls:
    Ctrl+Shift+P > "Tasks: Run Task" > "Build Black Hole Simulation"
    
    # Or manually with MSVC
-   cl.exe /EHsc /DGLEW_STATIC src/main.cpp src/AccretionDisk.cpp -I"vendor/glfw-3.4.bin.WIN64/include" -I"vendor/glew-2.1.0/include" -I"vendor" /link glfw3dll.lib glew32s.lib opengl32.lib user32.lib gdi32.lib shell32.lib
+   cl.exe /EHsc /DGLEW_STATIC src/main.cpp src/AccretionDisk.cpp -I"vendor/glfw-3.4.bin.WIN64/include" -I"vendor/glew-2.1.0/include" -I"vendor" /link /LIBPATH:"vendor/glfw-3.4.bin.WIN64/lib-vc2022" /LIBPATH:"vendor/glew-2.1.0/lib/Release/x64" glfw3dll.lib glew32s.lib opengl32.lib user32.lib gdi32.lib shell32.lib
    ```
 
 3. Run the simulation:
